@@ -1,0 +1,1274 @@
+#region imports
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Globalization;
+using System.Drawing;
+using QuantConnect;
+using QuantConnect.Algorithm.Framework;
+using QuantConnect.Algorithm.Framework.Selection;
+using QuantConnect.Algorithm.Framework.Alphas;
+using QuantConnect.Algorithm.Framework.Portfolio;
+using QuantConnect.Algorithm.Framework.Execution;
+using QuantConnect.Algorithm.Framework.Risk;
+using QuantConnect.Parameters;
+using QuantConnect.Benchmarks;
+using QuantConnect.Brokerages;
+using QuantConnect.Util;
+using QuantConnect.Interfaces;
+using QuantConnect.Algorithm;
+using QuantConnect.Indicators;
+using QuantConnect.Data;
+using QuantConnect.Data.Consolidators;
+using QuantConnect.Data.Custom;
+using QuantConnect.DataSource;
+using QuantConnect.Data.Fundamental;
+using QuantConnect.Data.Market;
+using QuantConnect.Data.UniverseSelection;
+using QuantConnect.Notifications;
+using QuantConnect.Orders;
+using QuantConnect.Orders.Fees;
+using QuantConnect.Orders.Fills;
+using QuantConnect.Orders.Slippage;
+using QuantConnect.Scheduling;
+using QuantConnect.Securities;
+using QuantConnect.Securities.Equity;
+using QuantConnect.Securities.Future;
+using QuantConnect.Securities.Option;
+using QuantConnect.Securities.Forex;
+using QuantConnect.Securities.Crypto;
+using QuantConnect.Securities.Interfaces;
+using QuantConnect.Storage;
+using QuantConnect.Data.Custom.AlphaStreams;
+using QCAlgorithmFramework = QuantConnect.Algorithm.QCAlgorithm;
+using QCAlgorithmFrameworkBridge = QuantConnect.Algorithm.QCAlgorithm;
+using QuantConnect.Indicators.CandlestickPatterns;
+#endregion
+namespace QuantConnect.Algorithm.CSharp
+{
+    public class GeekyVioletPelican : QCAlgorithm
+    {
+        // Market data and analysis tools
+        private Symbol _symbol; // Symbol for the asset being traded
+        private RollingWindow<TradeBar> _rollingWindow;
+        // For general short-term analysis, possibly size 2 for basic patterns
+        private RollingWindow<decimal> _upperBand = new RollingWindow<decimal>(2);
+        private RollingWindow<decimal> _lowerBand = new RollingWindow<decimal>(2);
+        // Specifically for patterns requiring 3 bars, like CHNXTR or CLNXTR
+        private TradeBarConsolidator _consolidator; // Consolidates market data into larger bars, e.g., 30 minutes from 1 minute
+        private RollingWindow<decimal> _slopeValues = new RollingWindow<decimal>(5);
+        private RollingWindow<IndicatorDataPoint> _pphlValues = new RollingWindow<IndicatorDataPoint>(25);
+
+
+        // Trading strategy variables
+        private decimal _profitTargetPercent = 2.0m; // Desired profit target as a percentage of the entry price
+        private decimal _stopLossPercent = 1.5m; // Desired stop loss as a percentage of the entry price
+        private bool _awaitingPinBarFailure = false; // Flag to indicate awaiting a trade opportunity after a pin bar failure
+        private bool _isLastPinBarBullish = false; // Indicates if the last pin bar detected was bullish
+        private bool _middleBarSurpassed = false; // Indicates if the middle bar's high/low has been surpassed, for pin bar logic
+        private bool _skipNext = false; // General purpose flag, usage depends on specific strategy logic
+
+        // Flags to enable/disable specific parts of the trading strategy
+        private bool _isPinBarSetup = true; // Enables pin bar detection and trading logic
+        private bool _isInsideBarSetup = false; // Enables inside bar detection and trading logic
+        private bool _isToFroSetup = false; // General flag, possibly for enabling a specific trading setup or strategy component
+
+        // Variables to record market conditions or trading setup states
+        private DateTime _lastPinBarTime; // Time of the last pin bar detected
+        private DateTime _recordedTime;
+        private DateTime RecTimeL;
+        private DateTime RecTimeS;
+        private DateTime ExTimeS;
+        private DateTime ExTimeL;
+        private DateTime SLLTime;
+        private DateTime SLTime;
+
+
+        // General purpose time recording, usage depends on specific strategy logic
+        private decimal _PinLow;
+        private decimal _PinHigh;
+        // The extreme price (high or low) of the last pin bar, for trade decision
+        private decimal _recordedHigh; // Recorded high price for use in specific trading conditions or checks
+        private decimal _recordedLow;
+        private decimal _ChHigh;
+        private decimal _30ISlow;
+        private decimal _30IShigh;
+        private decimal _30ILlow;
+        private decimal SLprice;
+        private decimal _30ILhigh;
+
+        // To store the high price for CHR or CHC conditions
+        private decimal _ChLow;  // To store the low price for CHR or CHC conditions
+        private DateTime _ChTime;  // Recorded low price for use in specific trading conditions or checks
+        private decimal _clrCLCHigh; // To store the high price for CLR or CLC conditions
+        private decimal _clrCLCLow;  // To store the low price for CLR or CLC conditions
+        private DateTime _clrCLCTime; // To store the time of the bar that met CLR or CLC conditions
+
+        // Flags indicating the state of the market relative to recorded conditions
+        private bool _awaitingCHFailure = false; // Awaits a failure of a Consecutive High condition to trigger a trade
+        private bool HighBroken = false; // Indicates if a previously recorded high has been exceeded
+        private bool LowBroken = false;
+        private bool _INL = false;
+        private bool _INLFLIP = false;
+        private bool _INS = false;
+        private bool _INSFLIP = false;
+        private decimal _lowTillNow;
+        private decimal _highTillNow;
+        private decimal insHigh;
+        private decimal inlHigh;
+        private decimal inlLow;
+        private decimal insLow;
+        private DateTime inlTime;
+        private DateTime insTime;
+        private decimal chnxtrHigh;
+        private decimal chnxtrLow;
+        private DateTime chnxtrTime;
+
+        private decimal clnxtrHigh;
+        private decimal clnxtrLow;
+        private DateTime clnxtrTime;
+        private bool InSwitchG = false;
+        private bool InSwitchR = false;
+        private bool ChSwitch = false;
+        private bool ClSwitch = false;
+        bool X;
+        bool XC;
+        bool YC;
+        bool Y;
+        bool Z;
+        bool ZX;
+        decimal _30high, _30low;
+        //decimal _30Ihigh, _30Ilow;
+        decimal _30Phigh, _30Plow;
+        decimal _30Nhigh, _30Nlow;
+        decimal upperperc;
+        decimal lowerperc;
+        decimal avgBbVolatility;
+        decimal avgBbLength;
+        decimal checkMBbullish;
+        decimal checkMBbearish;
+        bool eliminateL = false;
+        bool eliminateS = false;
+        bool RecNexecute = false;
+        bool RecShort = false;
+        bool RecLong = false;
+        bool XD = false;
+        bool YD = false;
+        bool ZD = false;
+        bool ZE = false;
+        bool SLhitS = false;
+        bool SLhitL = false;
+        decimal _30Rlow = 0m;
+        decimal _30Rhigh = 0m;
+        bool Execute;
+        bool ShortDisabler = false;
+        bool LongDisabler = false;
+        bool InDisabler = false;
+        bool ShortDisablerL = false;
+        bool LongDisablerL = false;
+        bool InDisablerL = false;
+        bool SLhitIL = false;
+        bool SLhitIS = false;
+        bool SL = false;
+        bool SLL = false;
+        bool onlyif = false;
+        bool CounterStop = false;
+        bool CounterStopL = false;
+
+
+
+
+
+        private TradeBar currentBar;
+        // Declarations for CLONG
+        private BollingerBands _BB;
+        private PivotPointsHighLow _pphl;
+        private Dictionary<string, OrderDetails> _activeTrades = new Dictionary<string, OrderDetails>();
+
+        public override void Initialize()
+        {
+            SetStartDate(2023, 12, 1);
+            SetEndDate(2024, 2, 1);
+            SetCash("USDT", 100000);
+
+
+            SetTimeZone("Asia/Kolkata");
+            SetBrokerageModel(BrokerageName.BinanceFutures, AccountType.Margin);
+
+            var cryptoPair = AddCryptoFuture("SOLUSDT", Resolution.Minute);
+            _symbol = cryptoPair.Symbol;
+            cryptoPair.SetLeverage(20);
+
+            _rollingWindow = new RollingWindow<TradeBar>(2);
+            _BB = new BollingerBands(20, 2, MovingAverageType.Simple);
+            _pphl = new PivotPointsHighLow(5, 5, 100);
+
+
+            var consolidator = new TradeBarConsolidator(TimeSpan.FromMinutes(30));
+            consolidator.DataConsolidated += OnDataConsolidated;
+            SubscriptionManager.AddConsolidator(_symbol, consolidator);
+
+        }
+
+        // Helper method to find the most recent high or low pivot
+        private IndicatorDataPoint GetMostRecentPivot(int pivotType)
+        {
+            IndicatorDataPoint mostRecentPivot = null;
+
+            foreach (var point in _pphlValues)
+            {
+                if ((point.Value > 0 && pivotType == 1) || (point.Value < 0 && pivotType == -1)) // Matches the pivot type we're looking for
+                {
+                    mostRecentPivot = point; // Since we're iterating from most recent to oldest, the first match is the most recent
+                    break; // Exit loop once the most recent pivot is found
+                }
+            }
+
+            return mostRecentPivot;
+        }
+
+        private void OnDataConsolidated(object sender, TradeBar consolidatedBar)
+        {
+
+            _BB.Update(consolidatedBar.Time, consolidatedBar.Close);
+            _pphl.Update(consolidatedBar);
+            _pphlValues.Add(_pphl.Current);
+
+            if (!_BB.IsReady) return;
+            if (_BB.IsReady)
+            {
+                _upperBand.Add(_BB.UpperBand.Current.Value);
+                _lowerBand.Add(_BB.LowerBand.Current.Value);
+
+            }
+            _rollingWindow.Add(consolidatedBar);
+
+            /*if(_pphl.IsReady){
+
+                            Plot("Pivot Points", "Price", consolidatedBar.Close);
+
+
+                            Plot("PivotPointsHighLow", "pphl", _pphl);
+
+
+                            var mostRecentHigh = GetMostRecentPivot(1); // 1 for high pivot
+                            var mostRecentLow = GetMostRecentPivot(-1); // -1 for low pivot
+
+                            if (mostRecentHigh != null && mostRecentLow != null)
+                            {
+                                Log($"Most Recent High Pivot at {mostRecentHigh.Time} with value {mostRecentHigh.Value}");
+                                Log($"Most Recent Low Pivot at {mostRecentLow.Time} with value {mostRecentLow.Value}");
+
+                                if(mostRecentLow.Time > mostRecentHigh.Time){
+
+                                    // Calculate the time difference in minutes
+                                    double timeDifferenceInMinutes = (mostRecentHigh.Time - mostRecentLow.Time).TotalMinutes;
+                                    
+                                    // Now, divide by 30 to get the required value
+                                    double normalizedTimeDifference = timeDifferenceInMinutes / 30;
+
+                                    // Convert normalizedTimeDifference back to decimal for consistent calculation
+                                    decimal normalizedTimeDifferenceDecimal = (decimal)normalizedTimeDifference;
+
+                                    // Ensure you handle division by zero or check if normalizedTimeDifferenceDecimal is not zero
+                                    var _currentTrend = (mostRecentHigh.Value - mostRecentLow.Value) / normalizedTimeDifferenceDecimal;
+                                    _slopeValues.Add(_currentTrend);
+                                    //Plot("Pivot Points", "High Pivot", consolidatedBar.Close);
+
+                                    Log($"Current Pivot Point Slope {_currentTrend} at {Time}");
+
+
+                                }
+                                else{
+
+                                    // Calculate the time difference in minutes
+                                    double timeDifferenceInMinutes = (mostRecentLow.Time - mostRecentHigh.Time).TotalMinutes;
+                                    
+                                    // Now, divide by 30 to get the required value
+                                    double normalizedTimeDifference = timeDifferenceInMinutes / 30;
+                                    
+                                    // Convert normalizedTimeDifference back to decimal for consistent calculation
+                                    decimal normalizedTimeDifferenceDecimal = (decimal)normalizedTimeDifference;
+
+                                    // Ensure you handle division by zero or check if normalizedTimeDifferenceDecimal is not zero
+                                    var _currentTrend = (mostRecentLow.Value - mostRecentHigh.Value) / normalizedTimeDifferenceDecimal;
+                                    _slopeValues.Add(_currentTrend);
+                                    Log($"Current Pivot Point Slope {_currentTrend} at {Time}");
+
+                                }
+
+                            }
+
+                        }*/
+
+            if (_rollingWindow.IsReady && _upperBand.IsReady && _lowerBand.IsReady)
+            {
+
+                var pinBar = _rollingWindow[1]; // Oldest
+                var middleBar = _rollingWindow[0];
+                decimal highOf2 = Math.Max(pinBar.High, middleBar.High);
+                decimal lowOf2 = Math.Min(pinBar.Low, middleBar.Low);
+                decimal UB1 = _upperBand[1];
+                decimal UB0 = _upperBand[0];
+                decimal LB1 = _lowerBand[1];
+                decimal LB0 = _lowerBand[0];
+                if ((UB1 - LB1) == 0 || (UB0 - LB0) == 0)
+                {
+                    return;
+                }
+                decimal avgUB = (_upperBand[0] + _upperBand[1]) / 2;
+                decimal avgLB = (_lowerBand[0] + _lowerBand[1]) / 2;
+                upperperc = ((highOf2 - avgLB) / (avgUB - avgLB)) * 100;
+                lowerperc = ((lowOf2 - avgLB) / (avgUB - avgLB)) * 100;
+                decimal Mh = ((middleBar.High - avgLB) / (avgUB - avgLB)) * 100;
+                decimal Ml = ((middleBar.Low - avgLB) / (avgUB - avgLB)) * 100;
+
+
+                avgBbVolatility = ((avgUB - avgLB) / avgLB) * 100;
+
+
+                // Calculate BB Length for both bars (assuming you're expressing this as a ratio, not percentage)
+                decimal bbLengthPin = (pinBar.High - pinBar.Low) / (UB1 - LB1);
+                decimal bbLengthMiddle = (middleBar.High - middleBar.Low) / (UB0 - LB0);
+                checkMBbullish = ((middleBar.High - middleBar.Open) / (UB0 - LB0)) * 100;
+                checkMBbearish = ((middleBar.Open - middleBar.Low) / (UB0 - LB0)) * 100;
+
+                // Average BB Length
+                avgBbLength = ((bbLengthPin + bbLengthMiddle) / 2) * 100;
+                if (avgBbVolatility < 7m && avgBbVolatility > 1.5m && avgBbLength < 30)
+                {
+
+                    if (_isToFroSetup)
+                    {
+                        // Check for Consecutive High or Consecutive High Continuation
+                        if (CheckForCCorCR(_rollingWindow))
+                        {
+                            // Record details if CH or CHC condition is met
+                            _ChHigh = _rollingWindow[0].High;
+                            _ChLow = _rollingWindow[0].Low;
+                            _ChTime = _rollingWindow[0].Time;
+                            ChSwitch = true;
+                            if (upperperc > 90 || lowerperc < 10 || (Mh < 60 && Mh > 40 && Ml > 40 && Ml < 60))
+                            {
+                                RecNexecute = true;
+                                Execute = false;
+                            }
+                            else
+                            {
+                                Execute = true;
+                                RecNexecute = false;
+
+                                if (avgBbVolatility < 3.4m)
+                                {
+                                    eliminateS = false;
+                                    eliminateL = false;
+                                }
+                                else
+                                {
+                                    if (upperperc > 45 && lowerperc > 20 && lowerperc < 45)
+                                    {
+                                        eliminateS = true;
+                                        //Log($"short eliminated {upperperc} {lowerperc}");
+                                    }
+                                    if (upperperc > 80 && lowerperc > 65 && lowerperc < 80)
+                                    {
+                                        eliminateL = true;
+                                        //Log($"long eliminated {upperperc} {lowerperc}");
+                                    }
+                                }
+                            }
+
+
+                            //Log($"CHR or CHC detected at {_chrCHCTime}: High = {_chrCHCHigh}, Low = {_chrCHCLow}");
+                        }
+
+                        // Additional logic based on CH and CL conditions can be added here
+                    }
+
+
+
+                    if (_isPinBarSetup)
+                    {
+                        // Middle
+                        if (upperperc < 90 && lowerperc > 10)
+                        {
+
+                            if (CheckForPINSorPINL(pinBar, out _isLastPinBarBullish))
+                            {
+                                _lastPinBarTime = pinBar.Time;
+                                _PinLow = pinBar.Low;
+                                _PinHigh = pinBar.High;
+
+                                if (_isLastPinBarBullish && checkMBbullish < 15)
+                                {
+
+                                    _middleBarSurpassed = ((middleBar.Low < _PinLow));
+                                }
+                                else if (checkMBbearish < 15)
+                                {
+                                    _middleBarSurpassed = ((middleBar.High > _PinHigh));
+                                }
+
+                                if (!_middleBarSurpassed)
+                                {
+                                    _awaitingPinBarFailure = true;
+                                    X = false;
+                                    Y = false;
+                                }
+
+
+                            }
+                        }
+                    }
+                }
+                if (avgBbVolatility < 7m && avgBbVolatility > 1.5m && avgBbLength < 60)
+                {
+
+                    if (_isInsideBarSetup)
+                    {
+                        // Check for Inside Bar Long or Inside Bar Long for X Inside Bars
+                        if (CheckForINLorINLForXINS(_rollingWindow))
+                        {
+                            // Logic to handle the detection of an Inside Bar Long pattern
+                            // For example, recording details, logging, or initiating a trade
+                            inlHigh = _rollingWindow[0].High;
+                            inlLow = _rollingWindow[0].Low;
+                            inlTime = _rollingWindow[0].Time;
+                            InSwitchG = true;
+                            //SL = true;
+                            onlyif = true;
+                            InDisablerL = false;
+                            LongDisablerL = false;
+                            ShortDisablerL = false;
+
+                            if (upperperc > 100)
+                            {
+                                LongDisablerL = true;
+                            }
+                            if (lowerperc < 0)
+                            {
+                                ShortDisablerL = true;
+                            }
+                            if (lowerperc > 35 && upperperc < 65)
+                            {
+                                InDisablerL = true;
+                            }
+
+                            //Log($"Inside Bar Long detected at {inlTime}: High = {inlHigh}, Low = {inlLow}");
+                        }
+
+                        // Check for Inside Bar Short or Inside Bar Short for X Inside Bars Long
+                        if (CheckForINSorINSForXINL(_rollingWindow))
+                        {
+                            // Logic to handle the detection of an Inside Bar Short pattern
+                            // Similar actions to the Inside Bar Long detection
+                            insHigh = _rollingWindow[0].High;
+                            insLow = _rollingWindow[0].Low;
+                            insTime = _rollingWindow[0].Time;
+                            InSwitchR = true;
+                            //SLL = true;
+                            onlyif = true;
+                            InDisabler = false;
+                            LongDisabler = false;
+                            ShortDisabler = false;
+
+                            if (upperperc > 90)
+                            {
+                                LongDisabler = true;
+                            }
+                            if (lowerperc < 10)
+                            {
+                                ShortDisabler = true;
+                            }
+                            if ((lowerperc < 65 && upperperc > 65) || (upperperc > 35 && lowerperc < 35))
+                            {
+                                InDisabler = true;
+                            }
+                            //Log($"Inside Bar Short detected at {insTime}: High = {insHigh}, Low = {insLow}");
+                        }
+                    }
+                }
+            }
+
+        }
+
+        public override void OnData(Slice data)
+        {
+            if (!data.ContainsKey(_symbol))
+            {
+                Log("Symbol not found!");
+                return;
+            }
+            foreach (var tradeId in _activeTrades.Keys.ToList())
+            {
+                var trade = _activeTrades[tradeId];
+                if (!data.ContainsKey(trade.Symbol) || trade.Status != OrderStatus.Submitted) continue;
+
+                var currentPrice = data[trade.Symbol].Close;
+
+                // Determine if the stop loss condition is met
+                bool shouldLiquidate = false;
+
+                // For long positions: liquidate if current price <= stop loss price
+                if (trade.Quantity > 0 && currentPrice <= trade.StopLossPrice)
+                {
+                    shouldLiquidate = true;
+                }
+                // For short positions: liquidate if current price >= stop loss price
+                else if (trade.Quantity < 0 && currentPrice >= trade.StopLossPrice)
+                {
+                    shouldLiquidate = true;
+                }
+
+                if (shouldLiquidate)
+                {
+                    // Execute liquidation
+                    MarketOrder(_symbol, -(trade.Quantity)); // This will close the position at the current market price
+                    Log($"Liquidating {trade.EntryType} position for {trade.Symbol} due to stop loss condition at price: {currentPrice}.");
+
+                    // Remove the trade from active trades list to avoid re-checking it
+                    _activeTrades.Remove(tradeId);
+                }
+            }
+            //var _tradebar = data.Bars[_symbol];
+
+            if (_isInsideBarSetup)
+            {
+                //ProcessForINLorINLForXINS(data);
+                ProcessForINSorINSForXINL(data);
+            }
+            if (_isPinBarSetup)
+            {
+                ProcessPinBarSetup(data);
+            }
+            if (_isToFroSetup)
+            {
+                ProcessForCCorCR(data);
+            }
+
+        }
+
+
+
+        private bool CheckForPINSorPINL(TradeBar bar, out bool isBullish)
+        {
+            var totalLength = bar.High - bar.Low;
+            var bodyLength = Math.Abs(bar.Close - bar.Open);
+            var upperWick = bar.High - Math.Max(bar.Close, bar.Open);
+            var lowerWick = Math.Min(bar.Close, bar.Open) - bar.Low;
+            var isLongWick = upperWick > 2m * bodyLength || lowerWick > 2m * bodyLength;
+            var isSmallBody = bodyLength < totalLength * 0.15m;
+
+            isBullish = lowerWick > upperWick && isLongWick && isSmallBody;
+            bool isBearish = upperWick > lowerWick && isLongWick && isSmallBody;
+            return isBullish || isBearish;
+        }
+
+        private bool CheckForCCorCR(RollingWindow<TradeBar> window)
+        {
+            // Check if the most recent two bars have higher highs than the bar before them
+            return (window[0].High * 0.9998m) > window[1].High || (window[0].Low * 0.9998m) < window[1].Low;
+        }
+
+        private bool CheckForINLorINLForXINS(RollingWindow<TradeBar> window)
+        {
+            // Inside bar condition: bar[0]'s high is lower than bar[1]'s high and bar[0]'s low is higher than bar[1]'s low
+            bool isInsideBar = window[0].High < (window[1].High * 1.0002m) && window[0].Low > (window[1].Low * 0.9998m);
+
+            // Before bar is green condition: bar[1]'s close is higher than bar[1]'s open
+            bool beforeBarIsGreen = window[1].Close > window[1].Open;
+
+            // Return true if bar[0] is an inside bar and the bar before it (bar[1]) is green
+            return isInsideBar;
+        }
+        private bool CheckForINSorINSForXINL(RollingWindow<TradeBar> window)
+        {
+            // Inside bar condition: bar[0]'s high is lower than bar[1]'s high and bar[0]'s low is higher than bar[1]'s low
+            bool isInsideBar = window[0].High < (window[1].High * 1.0002m) && window[0].Low > (window[1].Low * 0.9998m);
+
+            // Before bar is red condition: bar[1]'s close is lower than bar[1]'s open
+            bool beforeBarIsRed = window[1].Close < window[1].Open;
+
+            // Return true if bar[0] is an inside bar and the bar before it (bar[1]) is red
+            return isInsideBar;
+        }
+        private void ProcessPinBarSetup(Slice data)
+        {
+            if (!_rollingWindow.IsReady || _middleBarSurpassed)
+                return;
+            var currentBar = data[_symbol];
+
+            if (_awaitingPinBarFailure)
+            {
+                // The most recent bar in the rolling window.
+
+                // Check for the immediate aftermath of a pin bar (60 to 61 minutes later)
+                if (currentBar.Time >= _lastPinBarTime.AddMinutes(60) && currentBar.Time <= _lastPinBarTime.AddMinutes(61))
+                {
+                    _30Phigh = currentBar.High;
+                    _30Plow = currentBar.Low;
+                    if ((_isLastPinBarBullish && currentBar.Low < _PinLow) ||
+                        (!_isLastPinBarBullish && currentBar.High > _PinHigh))
+                    {
+                        _awaitingPinBarFailure = false;
+
+                    }
+                }
+
+                // Check for trading opportunities beyond the immediate aftermath and within the execution window
+                if (currentBar.Time > _lastPinBarTime.AddMinutes(61) && currentBar.Time < _lastPinBarTime.AddMinutes(89))
+                {
+
+                    if (!X && !Y)
+                    {
+                        if (_30Phigh > currentBar.High)
+                        {
+                            _30Phigh = currentBar.High;
+                        }
+                        if (_30Plow < currentBar.Low)
+                        {
+                            _30Plow = currentBar.Low;
+                        }
+                        if (_isLastPinBarBullish && currentBar.Low < _PinLow)
+                        {
+                            SetShort(_symbol, "PINS", Math.Min(_30Phigh, _PinHigh), 1m, 10m, currentBar.Close);
+                            //Log($"PINS at {currentBar.Time.AddHours(5.5)}: Low={currentBar.Low}");
+                            X = true;
+
+
+                        }
+                        else if (!_isLastPinBarBullish && currentBar.High > _PinHigh)
+                        {
+                            SetLong(_symbol, "PINL", Math.Min(_30Plow, _PinLow), 1m, 10m, currentBar.Close);
+                            //Log($"PINL at {currentBar.Time.AddHours(5.5)}: High={currentBar.High}");
+                            Y = true;
+
+                        }
+                    }
+                }
+
+                if (currentBar.Time > _lastPinBarTime.AddMinutes(91) && currentBar.Time < _lastPinBarTime.AddMinutes(119))
+                {
+                    if (X)
+                    {
+                        if (currentBar.High > Math.Min(_30Phigh, _PinHigh))
+                        {
+                            SetLong(_symbol, "PINSFLIP", Math.Min(_30Plow, _PinLow), 1m, 20m, currentBar.Close);
+                            X = false;
+                            _awaitingPinBarFailure = false;
+                        }
+                    }
+                    if (Y)
+                    {
+                        if (currentBar.Low < Math.Min(_30Plow, _PinLow))
+                        {
+                            SetShort(_symbol, "PINLFLIP", Math.Min(_30Phigh, _PinHigh), 1m, 20m, currentBar.Close);
+                            Y = false;
+                            _awaitingPinBarFailure = false;
+                        }
+                    }
+
+
+                }
+            }
+
+
+
+        }
+        private void ProcessForCCorCR(Slice data)
+        {
+
+
+            var currentBar = data[_symbol];
+            /*if (RecNexecute)
+            {
+                if (currentBar.Time > _ChTime.AddMinutes(30) && currentBar.Time <= _ChTime.AddMinutes(59))
+                {
+                    // Update _30low and _30high regardless of conditions to simplify logic
+                    _30low = Math.Min(_30low, currentBar.Low);
+                    _30high = Math.Max(_30high, currentBar.High);
+
+                    // Check for XD condition or update based on high price threshold
+                    if (!XD && currentBar.High > (_ChHigh * 1.0005m))
+                    {
+                        XD = true;
+                    }
+                    // If XD is true, check for ZD condition
+                    if (XD && currentBar.Low < _ChLow)
+                    {
+                        ZD = true;
+                        XD = false;
+                    }
+
+                    // Update _30Rlow and _30Rhigh when ZD or ZE is true
+                    if (ZD)
+                    {
+                        _30Rlow = Math.Min(_30Rlow, currentBar.Low);
+                    }
+
+                    // Check for YD condition or update based on low price threshold
+                    if (!YD && currentBar.Low < (_ChLow * 1.0005m))
+                    {
+                        YD = true;
+                    }
+                    // If YD is true, check for ZE condition
+                    if (YD && currentBar.High > _ChHigh)
+                    {
+                        ZE = true;
+                        YD = false;
+                    }
+
+                    // Update _30Rhigh when ZE is true
+                    if (ZE)
+                    {
+                        _30Rhigh = Math.Max(_30Rhigh, currentBar.High);
+                    }
+                }
+                if (ZD && currentBar.Time > _ChTime.AddMinutes(31) && currentBar.Time <= _ChTime.AddMinutes(119))
+                {
+                    if (currentBar.High > _30high)
+                    {
+                        SLhitS = true;
+                        Log($"SL HIT [CSHORT]");
+                        RecTimeS = currentBar.Time;
+                        ZD = false;
+                    }
+                }
+                if (ZE && currentBar.Time > _ChTime.AddMinutes(31) && currentBar.Time <= _ChTime.AddMinutes(119))
+                {
+                    if (currentBar.Low < _30Rlow)
+                    {
+                        SLhitL = true;
+                        Log($"SL HIT [CLONG]");
+                        RecTimeL = currentBar.Time;
+                        ZE = false;
+                    }
+                }
+                if (SLhitL)
+                {
+                    if (currentBar.Time > RecTimeL && currentBar.Time <= RecTimeL.AddHours(1.5) && !(currentBar.Time > _ChTime.AddMinutes(30) && currentBar.Time <= _ChTime.AddMinutes(32)))
+                    {
+                        if (currentBar.High > _30Rhigh)
+                        {
+                            SetLong(_symbol, "CRECLONG", 0.5m, 0.5m, 10m, currentBar.Close);
+                            SLhitL = false;
+                            RecNexecute = false;
+                        }
+                    }
+                }
+                if (SLhitS)
+                {
+                    if (currentBar.Time > RecTimeS && currentBar.Time <= RecTimeS.AddHours(1.5) && !(currentBar.Time > _ChTime.AddMinutes(30) && currentBar.Time <= _ChTime.AddMinutes(32)))
+                    {
+                        if (currentBar.Low < _30Rlow)
+                        {
+                            SetShort(_symbol, "CRECSHORT", 0.5m, 0.5m, 10m, currentBar.Close);
+                            SLhitS = false;
+                            RecNexecute = false;
+                        }
+
+
+                    }
+                }
+            }*/
+            if (ChSwitch)
+            {
+                if (Execute)
+                {
+
+                    if (currentBar.Time == _ChTime.AddMinutes(30))
+                    {
+                        XC = false; // Tracks if Inside No-Low (INL) condition was found
+                        YC = false;
+                        XD = false;
+                        YD = false;
+                        _30high = currentBar.High;
+                        _30low = currentBar.Low;
+                        _30Rlow = currentBar.Low;
+                        _30Rhigh = currentBar.High;
+                        // Tracks if INL condition flipped
+
+                        //decimal highTillNow = currentBar.High; // Initialize to maximum to track the lowest low
+                    }
+                    if (currentBar.Time > _ChTime.AddMinutes(31) && currentBar.Time <= _ChTime.AddMinutes(59))
+                    {
+
+                        _30low = Math.Min(_30low, currentBar.Low);
+                        _30high = Math.Max(_30high, currentBar.High); // Consolidate high/low updates
+
+                        // Handle XC condition and trading logic
+                        if (!XC && currentBar.High > (_ChHigh))
+                        {
+                            XC = true;
+                        }
+                        if (XC && currentBar.Low < _ChLow && !eliminateS)
+                        {
+                            SetShort(_symbol, "CSHORT", (currentBar.Close * 1.003m), 0.5m, 10m, currentBar.Close);
+                            ChSwitch = false;
+
+                        }
+
+                        // Handle YC condition and trading logic
+                        if (!YC && currentBar.Low < (_ChLow))
+                        {
+                            YC = true;
+                        }
+                        if (YC && currentBar.High > _ChHigh && !eliminateL)
+                        {
+                            SetLong(_symbol, "CLONG", (currentBar.Close * 0.997m), 0.5m, 10m, currentBar.Close);
+                            ChSwitch = false;
+                        }
+                    }
+                }
+
+
+                if (currentBar.Time == _ChTime.AddMinutes(60))
+                {
+                    _30Nhigh = currentBar.High;
+                    _30Nlow = currentBar.Low;
+                }
+                if (currentBar.Time > _ChTime.AddMinutes(60) && currentBar.Time <= _ChTime.AddMinutes(89))
+                {
+                    if (currentBar.Low < _30Nlow)
+                    {
+                        _30Nlow = currentBar.Low; // Updates _lowTillNow if the current bar's low is lower than _lowTillNow
+                    }
+                    if (currentBar.High > _30Nhigh)
+                    {
+                        _30Nhigh = currentBar.High; // Updates _lowTillNow if the current bar's low is lower than _lowTillNow
+                    }
+                    if (XC && currentBar.Low < _ChLow && !eliminateS)
+                    {
+                        SetShort(_symbol, "CNXTSHORT", (currentBar.Close * 1.003m), 0.5m, 10m, currentBar.Close);
+                        //Log($"CNXTSHORT at at {currentBar.Time.AddHours(5.5)}: Low={currentBar.Low}");
+
+                        ChSwitch = false;
+                    }
+                    if (YC && currentBar.High > _ChHigh && !eliminateL)
+                    {
+                        SetLong(_symbol, "CNXTLONG", (currentBar.Close * 0.997m), 0.5m, 10m, currentBar.Close);
+                        //Log($"CNXTLONG at at {currentBar.Time.AddHours(5.5)}: Low={currentBar.Low}");
+
+                        ChSwitch = false;
+                    }
+                }
+                if (currentBar.Time == _ChTime.AddMinutes(89))
+                {
+                    eliminateL = false;
+                    eliminateS = false;
+                }
+            }
+        }
+
+        private void ProcessForINLorINLForXINS(Slice data)
+        {
+            var currentBar = data[_symbol];
+            if (InSwitchG)
+            {
+                if (currentBar.Time == inlTime.AddMinutes(30))
+                {
+                    _INL = false; // Tracks if Inside No-Low (INL) condition was found
+                    _INLFLIP = false;
+                    _30ILhigh = currentBar.High;
+                    _30ILlow = currentBar.Low;// Tracks if INL condition flipped
+                                              //decimal highTillNow = currentBar.High; // Initialize to maximum to track the lowest low
+                }
+                // Check if current time is within the next 30 minutes window
+                if (currentBar.Time > inlTime.AddMinutes(30) && currentBar.Time <= inlTime.AddMinutes(59))
+                {
+
+
+                    // Check if we haven't logged an INL yet and the current high is greater than the high till now
+                    if (!_INL)
+                    {
+                        if (currentBar.Low < _30ILlow)
+                        {
+                            _30ILlow = currentBar.Low; // Updates _lowTillNow if the current bar's low is lower than _lowTillNow
+                        }
+                        if (currentBar.High > inlHigh)
+                        {
+                            if (!InDisablerL && !LongDisablerL)
+                            {
+                                //SetLong(_symbol, "INL", (currentBar.Close*0.997m), 0.7m, 10m, currentBar.Close);
+
+
+
+                                //Log($"INL at {currentBar.Time.AddHours(5.5)}");
+                                // Record the current low as low till now
+                            }
+                            _INL = true;
+                        }
+                    }
+
+                        // If INL is set and the current low is less than low till now, log INLFLIP
+                        if (_INL)
+                        {
+                            if (currentBar.High > _30ILhigh)
+                            {
+                                _30ILhigh = currentBar.High; // Updates _lowTillNow if the current bar's low is lower than _lowTillNow
+                            }
+                            if (currentBar.Low < inlLow)
+                            {
+                                Log("true");
+
+                                //SetShort(_symbol, "INLFLIP", _30ILhigh, 0.5m, 10m, currentBar.Close);
+                                ExTimeS = currentBar.Time;
+                                SL = true;
+                                InSwitchG = false;
+
+
+                                //Log($"INLFLIP at {currentBar.Time.AddHours(5.5)}");
+                                _INLFLIP = true;
+                            }
+                        }
+                        onlyif = ((_30ILhigh - insHigh) / insHigh) < 0.005m;
+
+                    if (onlyif && _INL && !_INLFLIP)
+                    {
+                        // Update _lowTillNow and _highTillNow if current bar's values are the extremes since the window started
+                        if (currentBar.Time == inlTime.AddMinutes(60))
+                        {
+                            _30ILhigh = currentBar.High;
+
+                        }
+                        if (currentBar.Time > inlTime.AddMinutes(60) && currentBar.Time <= inlTime.AddMinutes(89))
+                        {
+                            if (currentBar.High > _30ILhigh)
+                            {
+                                _30ILhigh = currentBar.High; // Updates _lowTillNow if the current bar's low is lower than _lowTillNow
+                            }
+
+                            if (currentBar.Low < _30ILlow)
+                            {
+
+                                //SetShort(_symbol, "INLNXTF", _30ILhigh, 0.5m, 10m, currentBar.Close);
+                                SL = true;
+                                ExTimeS = currentBar.Time;
+                                //Log($"INLNXTF at {currentBar.Time.AddHours(5.5)}");
+                                InSwitchG = false;
+                            }
+
+                        }
+                        if (currentBar.Time > insTime.AddMinutes(88) && currentBar.Time <= insTime.AddMinutes(89))
+                        {
+                            InSwitchG = false;
+                        }
+
+                    }
+                    if (currentBar.Time > inlTime.AddMinutes(88) && currentBar.Time <= inlTime.AddMinutes(89))
+                    {
+                        InSwitchG = false;
+
+                    }
+                }
+
+            }
+            if (SL)
+            {
+                ProcessCounterINL(data, ExTimeS, _30ILhigh);
+            }
+            if (CounterStopL)
+            {
+                if (currentBar.Time > SLTime && currentBar.Time <= SLTime.AddMinutes(89))
+                {
+                    if (currentBar.Low < SLprice)
+                    {
+                        SetShort(_symbol, "INCOUNTERCounterSHORT", (currentBar.Close * 1.005m), 1m, 10m, currentBar.Close);
+                        CounterStopL = false;
+                    }
+                }
+            }
+        }
+        private void ProcessForINSorINSForXINL(Slice data)
+        {
+            var currentBar = data[_symbol];
+            if (InSwitchR)
+            {
+                if (currentBar.Time == insTime.AddMinutes(30))
+                {
+                    _INS = false; // Tracks if Inside No-Low (INL) condition was found
+                    _INSFLIP = false;
+                    _30IShigh = currentBar.High;
+                    _30ISlow = currentBar.Low; // Tracks if INL condition flipped
+
+                    //decimal highTillNow = currentBar.High; // Initialize to maximum to track the lowest low
+                }
+                // Check if current time is within the next 30 minutes window
+                if (currentBar.Time > insTime.AddMinutes(30) && currentBar.Time <= insTime.AddMinutes(59))
+                {
+                    // Check if we haven't logged an INL yet and the current high is greater than the high till now
+                    if (!_INS)
+                    {
+                        if (currentBar.High > _30IShigh)
+                        {
+                            _30IShigh = currentBar.High; // Updates _lowTillNow if the current bar's low is lower than _lowTillNow
+                        }
+                        if (currentBar.Low < insLow)
+                        {
+                            if (!InDisabler && !ShortDisabler)
+                            {
+                                //SetShort(_symbol, "INS", insHigh, 0.6m, 10m, currentBar.Close);
+                                //Log("INS");
+
+                            }
+                            //Log($"INS at {currentBar.Time.AddHours(5.5)}"); // Record the current low as low till now
+                            _INS = true;
+                        }
+                    }
+
+                    // If INL is set and the current low is less than low till now, log INLFLIP
+                    if (_INS)
+                    {
+                        if (currentBar.Low < _30ISlow)
+                        {
+                            _30ISlow = currentBar.Low; // Updates _lowTillNow if the current bar's low is lower than _lowTillNow
+                        }
+                        if (currentBar.High > insHigh)
+                        {
+                            if (!LongDisabler)
+                            {
+                                //SetLong(_symbol, "INSFLIP", (currentBar.Close* 0.998m) , 0.6m, 10m, currentBar.Close);
+                                //Log("INSFLIP");
+                                ExTimeL = currentBar.Time;
+                                SLL = true;
+                                _INLFLIP = true;
+                                InSwitchR = false;
+                            }
+                        }
+                    }
+                    onlyif = Math.Abs(((_30ISlow - insLow) / insLow)) < 0.005m;
+                    //Log($"{Math.Abs(((_30ISlow - insLow)/insLow))}");
+
+                }
+
+                if (onlyif && _INS && !_INSFLIP)
+                {
+                    // Update _lowTillNow and _highTillNow if current bar's values are the extremes since the window started
+                    if (currentBar.Time == inlTime.AddMinutes(60))
+                    {
+                        _30ISlow = currentBar.Low;
+
+                    }
+                    if (currentBar.Time > insTime.AddMinutes(60) && currentBar.Time <= insTime.AddMinutes(89))
+                    {
+                        if (currentBar.Low < _30ISlow)
+                        {
+                            _30ISlow = currentBar.Low; // Updates _lowTillNow if the current bar's low is lower than _lowTillNow
+                        }
+                        if (currentBar.High > insHigh)
+                        {
+                            if (!LongDisabler)
+                            {
+                                //SetLong(_symbol, "INSNXTF", Math.Min(insLow, _30ISlow), 0.5m, 10m, currentBar.Close);
+                                //Log("INSNXTF");
+                                SLL = true;
+                                ExTimeL = currentBar.Time;
+                                InSwitchR = false;
+                            }
+                        }
+
+                    }
+                }
+                if (currentBar.Time > insTime.AddMinutes(88) && currentBar.Time <= insTime.AddMinutes(89))
+                {
+                    InSwitchR = false;
+                }
+            }
+
+            if (SLL)
+            {
+                ProcessCounter(data, ExTimeL, _30ISlow);
+            }
+            if (CounterStop)
+            {
+                if (currentBar.Time > SLLTime && currentBar.Time <= SLLTime.AddMinutes(89))
+                {
+                    if (currentBar.High > SLprice)
+                    {
+                        SetLong(_symbol, "INCOUNTERCounterLONG", (currentBar.Close * 0.99m), 1m, 10m, currentBar.Close);
+                        CounterStop = false;
+                    }
+                }
+            }
+
+
+
+        }
+        private void ProcessCounter(Slice data, DateTime T, decimal D)
+        {
+            var currentBar = data[_symbol];
+            if (currentBar.Time > T && currentBar.Time < T.AddMinutes(210))
+            {
+                if (currentBar.Low < D)
+                {
+                    Log($"SL HIT");
+                    SLprice = (currentBar.Close * 1.005m);
+                    SetShort(_symbol, "INCOUNTERSHORT", SLprice, 1m, 10m, currentBar.Close);
+                    SLLTime = currentBar.Time;
+                    CounterStop = true;
+                    SLL = false;
+                }
+            }
+        }
+        private void ProcessCounterINL(Slice data, DateTime T, decimal D)
+        {
+            var currentBar = data[_symbol];
+            if (currentBar.Time > T && currentBar.Time < T.AddMinutes(210))
+            {
+                if (currentBar.High > D)
+                {
+                    Log($"SL HIT");
+                    SLprice = (currentBar.Close * 0.99m);
+                    SetLong(_symbol, "INCOUNTERLONG", SLprice, 1m, 10m, currentBar.Close);
+                    SLTime = currentBar.Time;
+                    CounterStopL = true;
+                    SL = false;
+                }
+            }
+        }
+        public double CalculatePriceDifferencePercentage(double initialPrice, double finalPrice)
+        {
+            // Ensure the initial price is not zero to avoid division by zero
+            if (initialPrice == 0)
+            {
+                throw new ArgumentException("Initial price cannot be zero.");
+            }
+
+            // Calculate the price difference
+            double priceDifference = finalPrice - initialPrice;
+
+            // Calculate the percentage difference
+            double percentageDifference = (priceDifference / initialPrice) * 100;
+
+            return percentageDifference;
+        }
+
+        private void SetLong(Symbol symbol, string entryType, decimal SLPrice, decimal takeProfitPercentage, decimal riskPercentage, decimal currentPrice)
+        {
+            var qty = (Math.Round(CalculatePositionSize(riskPercentage, currentPrice)));
+            var longOrderTicket = MarketOrder(symbol, qty);
+            Log($"Long {entryType} Upper pos: {upperperc},Lower pos: {lowerperc},BB Length: {avgBbLength},BB Volatility: {avgBbVolatility}");
+
+            var takeProfitPrice = RoundPrice(currentPrice * (1 + (takeProfitPercentage / 100)));
+            var takeProfitOrderTicket = LimitOrder(symbol, -qty, takeProfitPrice);
+
+
+            string tradeId = GenerateUniqueTradeId(symbol, entryType);
+            _activeTrades[tradeId] = new OrderDetails
+            {
+                TradeId = tradeId,
+                Symbol = symbol,
+                Quantity = (int)qty,
+                EntryType = entryType,
+                EntryPrice = currentPrice,
+                StopLossPrice = RoundPrice(SLPrice),
+                TakeProfitPrice = takeProfitPrice,
+                Status = OrderStatus.Submitted,
+                TakeProfitOrderId = takeProfitOrderTicket.OrderId
+            };
+        }
+
+        private void SetShort(Symbol symbol, string entryType, decimal SLPrice, decimal takeProfitPercentage, decimal riskPercentage, decimal currentPrice)
+        {
+            // Calculate the quantity for the short position based on the risk management strategy
+            var qty = -((Math.Round(CalculatePositionSize(riskPercentage, currentPrice)))); // Use negative quantity for shorting
+
+            // Enter short position with a market order
+            var shortOrderTicket = MarketOrder(symbol, qty);
+            Log($"Short {entryType} Upper pos: {upperperc},Lower pos: {lowerperc},BB Length: {avgBbLength},BB Volatility: {avgBbVolatility}");
+
+            // Calculate take profit price for the short position
+            var takeProfitPrice = RoundPrice(currentPrice * (1 - (takeProfitPercentage / 100)));
+
+            // Place a take profit limit order immediately for buying back (covering) the short position
+            var takeProfitOrderTicket = LimitOrder(symbol, -qty, takeProfitPrice); // Note: -qty because we're covering the short
+
+            // Generate a unique identifier for this trade
+            string tradeId = GenerateUniqueTradeId(symbol, entryType);
+
+            // Store trade details, including the take profit limit order ID
+            _activeTrades[tradeId] = new OrderDetails
+            {
+                TradeId = tradeId,
+                Symbol = symbol,
+                Quantity = (int)qty, // Keep quantity negative to indicate a short position
+                EntryType = entryType,
+                EntryPrice = currentPrice,
+                StopLossPrice = RoundPrice(SLPrice),
+                TakeProfitPrice = takeProfitPrice,
+                Status = OrderStatus.Submitted,
+                TakeProfitOrderId = takeProfitOrderTicket.OrderId
+            };
+        }
+        private string GenerateUniqueTradeId(Symbol symbol, string entryType)
+        {
+            return $"{symbol}_{entryType}_{Time}";
+        }
+
+        public decimal CalculatePositionSize(decimal riskPercentage, decimal currentPrice)
+        {
+            decimal availableCapital = Portfolio.CashBook["USDT"].Amount;
+            // Calculate the maximum amount to risk based on available capital and risk percentage
+            decimal maxRiskAmount = 200 * (riskPercentage / 10);
+
+            // Calculate the position size (number of units to buy)
+            decimal positionSize = maxRiskAmount;
+
+            return positionSize;
+        }
+        private decimal RoundPrice(decimal price)
+        {
+            return Math.Round(price, 3);
+        }
+        public override void OnOrderEvent(OrderEvent orderEvent)
+        {
+            if (orderEvent.Status != OrderStatus.Filled) return; // Only proceed if the order was filled
+
+            // Log the order fill details
+
+
+            // Iterate through the active trades to find the one related to the order event
+            foreach (var tradeId in _activeTrades.Keys)
+            {
+                var trade = _activeTrades[tradeId];
+
+                // Check if the filled order is a take profit order for the trade
+                if (trade.TakeProfitOrderId == orderEvent.OrderId)
+                {
+                    // Log take profit hit
+                    Log($"Take Profit Hit for {trade.EntryType} position on {trade.Symbol}. Exiting position at {orderEvent.FillPrice}");
+
+                    // Update trade status to indicate the position is closed
+                    trade.Status = OrderStatus.Filled;
+                }
+                OrderTicket takeProfitOrderTicket = Transactions.GetOrderTicket(trade.TakeProfitOrderId);
+                if (takeProfitOrderTicket != null && takeProfitOrderTicket.Status.IsOpen())
+                {
+                    takeProfitOrderTicket.Cancel("Cancelling take-profit due to stop-loss execution.");
+                    ///////////////////////////////////////////////////////////////Log($"Cancelled take-profit order {trade.TakeProfitOrderId} for trade {tradeId} after s);to);p-);lo);ss); e);xe);cu);ti);on);."););
+                }
+
+            }
+
+            // Example to remove filled trades from the active trades list
+            var filledTrades = _activeTrades.Where(kvp => kvp.Value.Status == OrderStatus.Filled).Select(kvp => kvp.Key).ToList();
+            foreach (var tradeId in filledTrades)
+            {
+                _activeTrades.Remove(tradeId);
+            }
+        }
+        private class OrderDetails
+        {
+            public string TradeId { get; set; }
+            public Symbol Symbol { get; set; }
+            public int Quantity { get; set; }
+            public string EntryType { get; set; }
+            public decimal EntryPrice { get; set; }
+            public decimal TakeProfitPrice { get; set; }
+            public decimal StopLossPrice { get; set; }
+            public OrderStatus Status { get; set; }
+            public int TakeProfitOrderId { get; set; }
+        }
+    }
+}
